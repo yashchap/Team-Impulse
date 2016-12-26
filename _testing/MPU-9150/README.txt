@@ -11,3 +11,4 @@ The actual example code of MPU-9150 code from arduino.cc couldn't smack a ball, 
 .
 .
 /* There are some example code located at this.parent. */ 
+/* To understand the concept of Tilt/Inclination Calculation in Analog devices, there is a pdf file attached too. */ 
