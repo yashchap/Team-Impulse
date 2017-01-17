@@ -81,14 +81,14 @@ void pneumatic()
   if(read_button_pneu)
   {
     Serial.println("_PNEUMATIC__ACT_");
-    //lcd.setCursor(0,0);
-    //lcd.println("_PNEUMATIC__ACT_");
+    lcd.setCursor(0,0);
+    lcd.println("_PNEUMATIC__ACT_");
     digitalWrite(relay_pneumatic_out,HIGH);
   }
   else
   {
     digitalWrite(relay_pneumatic_out,LOW);
-    //lcd.setCursor(0,0);
+    lcd.setCursor(0,0);
     Serial.println("PNEUMATIC_DEACT_");
   }
 }
@@ -100,14 +100,14 @@ void actuator()
   {
     digitalWrite(relay_actuator_out,LOW);
     //Serial.print("ACTUATOR_relay_released");
-    //lcd.setCursor(0,1);
-    //lcd.print("__ACTUATOR_ACT__");   
+    lcd.setCursor(0,1);
+    lcd.print("__ACTUATOR_ACT__");   
   }
   else
   {
     digitalWrite(relay_actuator_out,HIGH);
-    //lcd.setCursor(0,1);
-    //lcd.print("_ACTUATOR_DEACT_");  
+    lcd.setCursor(0,1);
+    lcd.print("_ACTUATOR_DEACT_");  
     //Serial.print("_ACTUATOR_DEACT_");  
   }
 }
@@ -121,11 +121,11 @@ void h_bridge()
 //  Serial.print("Value = ");
 //  Serial.println(value_analog);
   analogWrite(pwm_output,value_analog);
-   //lcd.setCursor(11,2);
+   lcd.setCursor(11,2);
   ((value_analog/100 > 0)) ? : lcd.print(" ")  ;
   ((value_analog/10 > 0)) ? : lcd.print(" ")  ;
-  //lcd.setCursor(11,2);
-  //lcd.print(value_analog);
+  lcd.setCursor(11,2);
+  lcd.print(value_analog);
   delay(260);
 }
 
