@@ -7,12 +7,11 @@
   #include "WProgram.h"
   #include "pins_arduino.h"
   #include "WConstants.h"
-  #include <Wire.h>
 #endif
 
 class PAHM{
   public:
-    PAHM();
+    PAHM(int ,int ,int ,int ,int ,int ,int );
     /*Pin Variales*/
     static int pwm_input_pin; /*pwm input for varying speed*/
     static int pwm_output_pin; /*pwm output for H-Bridge*/
