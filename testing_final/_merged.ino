@@ -24,6 +24,10 @@ const int act_out_two = 43;             // R4
 const int upper_pwm = 4;                // H3
 int upSpeed = 50;                       // pwm for upper motor is written through this variable
 
+const int xpin = A3;                    // x-axis of the accelerometer
+const int ypin = A2;                    // y-axis of the accelerometer
+const int zpin = A1;                    // z-axis of the accelerometer
+
 void setup() {
   // begin lcd communications
   lcd.begin(16, 4);
@@ -33,6 +37,9 @@ void setup() {
   // set pin modes
   pinMode(upper_pwm, OUTPUT);
   pinMode(pneumatic_pin, OUTPUT);
+  pinMode(xpin, INPUT);
+  pinMode(ypin, INPUT);
+  pinMode(zpin, INPUT);
   pinMode(act_out_one, OUTPUT);
   pinMode(act_out_two, OUTPUT);
   digitalWrite(act_out_one, LOW);
@@ -152,14 +159,32 @@ void setUpperPwm() {
 void updateLCD() {
   displayLCD("Motor PWM:", 0, 0);
   displayLCD(upSpeed, 14, 0, 3);
+  displayLCD("X", 3, 1);
+  displayLCD("Y", 8, 1);
+  displayLCD("Z", 13, 1);
+  displayLCD(analogRead(xpin), 4, 2, 4);
+  displayLCD(analogRead(ypin), 9, 2, 4);
+  displayLCD(analogRead(zpin), 14, 2, 4);
+  displayLCD("Timer:");
+  dsiplayLCD("#:##");                                         // Timer dummy
 }
+
+/*
+   |0|0|0|0|0|0|0|0|0|0|1|1|1|1|1|1|
+   |0|1|2|3|4|5|6|7|8|9|0|1|2|3|4|5|
+   ---------------------------------
+0  |M|o|t|o|r| |P|W|M|:| | |#|#|#| |
+1  | | | |X| | | | |Y| | | | |Z| | |
+2  | |#|#|#|#| |#|#|#|#| |#|#|#|#| |
+3  | | |T|i|m|e|r|:| | |#|:|#|#| | |
+*/
 
 // clear garbage values w/o updating the entire display
 void cleanLCD(byte end_col, byte end_row) {
   while (true) {
-    old_col = (old_col >= 14) ? 0 : (old_col + 1);
+    old_col = (old_col + 1) % 16;
     if (old_col == 0) {
-      old_row = (old_row >= 3) ? 0 : (old_row + 1);
+      old_row = (old_row + 1) % 4;
       lcd.setCursor(old_col, old_row);
     }
     if ((old_col == end_col) && (old_row == end_row)) return;
