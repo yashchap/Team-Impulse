@@ -16,18 +16,27 @@ LiquidCrystal lcd(34, 30, 28, 26, 24, 22);
 
 int pneumatic_pin = 49;                 // R5
 
-const int upper_pwm = 4;                // h3
+
+const int act_out_one = 37;             // R3
+const int act_out_two = 43;             // R4
+
+const int upper_pwm = 4;                // H3
 int upSpeed = 50;                       // pwm for upper motor is written through this variable
 
 void setup() {
-  Serial.begin(57600);
-
   // begin lcd communications
   lcd.begin(16, 4);
+
+  Serial.begin(57600);
 
   // set pin modes
   pinMode(upper_pwm, OUTPUT);
   pinMode(pneumatic_pin, OUTPUT);
+  pinMode(act_out_one, OUTPUT);
+  pinMode(act_out_two, OUTPUT);
+  digitalWrite(act_out_one, LOW);
+  digitalWrite(act_out_two, HIGH);
+
   
   // wait for ps2 to boot
   delay(300);
@@ -46,25 +55,26 @@ void loop() {
   if (ps2x.Button(PSB_SELECT))                                              // select - not used
     Serial.println("Select is being held");
 
-  if (ps2x.Button(PSB_PAD_UP)) {                                            // up - not set - linear actuator out
-    Serial.print("Up held this hard: ");
-    Serial.println(ps2x.Analog(PSAB_PAD_UP), DEC);
+  if (ps2x.Button(PSB_PAD_UP)) {                                            // up - move actuator up
+    Serial.println("Up held.");
+    moveActuator(HIGH, HIGH);
   }
   if (ps2x.Button(PSB_PAD_RIGHT)) {                                         // right - increase upper pwm
-    Serial.print("Right held. Increasing PWM");
     upSpeed++;
     setUpperPwm();
     delay(15);
   }
   if (ps2x.Button(PSB_PAD_LEFT)) {                                          // left - decrease upper pwm
-    Serial.print("Left held. Increasing PWM");
     upSpeed--;
     setUpperPwm();
     delay(15);
   }
-  if (ps2x.Button(PSB_PAD_DOWN)) {                                          // down - not set - linear actuator in
-    Serial.print("DOWN held this hard: ");
-    Serial.println(ps2x.Analog(PSAB_PAD_DOWN), DEC);
+  if (ps2x.Button(PSB_PAD_DOWN)) {                                          // down - move actuator down
+    Serial.println("DOWN held.");
+    moveActuator(LOW, LOW);
+  }
+  if (!ps2x.Button(PSB_PAD_UP) && !ps2x.Button(PSB_PAD_DOWN)) {
+    moveActuator(HIGH, LOW);
   }
 
   if (ps2x.NewButtonState()) {
@@ -81,13 +91,11 @@ void loop() {
   }
 
   if (ps2x.ButtonPressed(PSB_CIRCLE)) {                                     // o - reset upper pwm
-    Serial.println("Circle just pressed");
     upSpeed = 0;
     setUpperPwm();
   }
   if (ps2x.NewButtonState(PSB_CROSS)) {                                     // x - pneumatic control
     //will be TRUE if button was JUST pressed OR released
-    Serial.println("X just changed");
     fireDisc();
   }
   if (ps2x.ButtonReleased(PSB_SQUARE))                                      // # - not used
@@ -169,7 +177,15 @@ void setUpperPwm() {
 
 /*-------| LCD |---------------------------------------------------------------------------*/
 void updateLCD() {
-  lcd.setCursor(1,1);
-  lcd.print("PWM: ");
-  lcd.print(upperSpeed);
+  lcd.setCursor(0,1);
+  lcd.print("PWM  ");
+  (upSpeed >= 100) ? NULL : lcd.print(" ");
+  (upSpeed >= 10) ? NULL : lcd.print(" ");
+  lcd.print(upSpeed);
+}
+
+/*-------| Linear Actuator |---------------------------------------------------------------*/
+void moveActuator(int pwm1, int pwm2) {
+  digitalWrite(act_out_one, pwm1);
+  digitalWrite(act_out_two, pwm2);
 }
