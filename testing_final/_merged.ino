@@ -2,6 +2,11 @@
 #include <PS2X_lib.h>
 PS2X ps2x;
 
+// lcd lib
+#include <LiquidCrystal.h>
+LiquidCrystal lcd(34, 30, 28, 26, 24, 22);
+
+
 #define PS2_DAT        13
 #define PS2_CMD        12
 #define PS2_SEL        11
@@ -17,6 +22,9 @@ int upSpeed = 50;                       // pwm for upper motor is written throug
 void setup() {
   Serial.begin(57600);
 
+  // begin lcd communications
+  lcd.begin(16, 4);
+
   // set pin modes
   pinMode(upper_pwm, OUTPUT);
   pinMode(pneumatic_pin, OUTPUT);
@@ -29,6 +37,9 @@ void setup() {
 void loop() {
   // read gamepad. call atleast once a second
   ps2x.read_gamepad();
+
+  // update lcd
+  updateLCD();
 
   if (ps2x.Button(PSB_START))                                               // start - not used
     Serial.println("Start is being held");
@@ -51,7 +62,7 @@ void loop() {
     setUpperPwm();
     delay(15);
   }
-  if (ps2x.Button(PSB_PAD_DOWN)) {                                          // down - linear actuator in
+  if (ps2x.Button(PSB_PAD_DOWN)) {                                          // down - not set - linear actuator in
     Serial.print("DOWN held this hard: ");
     Serial.println(ps2x.Analog(PSAB_PAD_DOWN), DEC);
   }
@@ -148,12 +159,17 @@ int pneumatic_out;
 void fireDisc() {
   pneumatic_out = (pneumatic_out == LOW) ? HIGH : LOW;
   digitalWrite(pneumatic_pin, pneumatic_out);
-  Serial.println(pneumatic_out);
 }
 
 
 /*-------| Upper PWM |---------------------------------------------------------------------*/
 void setUpperPwm() {
   analogWrite(upper_pwm, upSpeed);
-  Serial.println(upSpeed);
+}
+
+/*-------| LCD |---------------------------------------------------------------------------*/
+void updateLCD() {
+  lcd.setCursor(1,1);
+  lcd.print("PWM: ");
+  lcd.print(upperSpeed);
 }
