@@ -16,6 +16,7 @@ LiquidCrystal lcd(34, 30, 28, 26, 24, 22);
 
 int pneumatic_pin = 49;                 // R5
 
+byte old_col = 0, old_row = 0;          // data persistance for lcd functions
 
 const int act_out_one = 37;             // R3
 const int act_out_two = 43;             // R4
@@ -50,11 +51,6 @@ void loop() {
   // update lcd
   updateLCD();
 
-  if (ps2x.Button(PSB_START))                                               // start - not used
-    Serial.println("Start is being held");
-  if (ps2x.Button(PSB_SELECT))                                              // select - not used
-    Serial.println("Select is being held");
-
   if (ps2x.Button(PSB_PAD_UP)) {                                            // up - move actuator up
     Serial.println("Up held.");
     moveActuator(HIGH, HIGH);
@@ -77,19 +73,6 @@ void loop() {
     moveActuator(HIGH, LOW);
   }
 
-  if (ps2x.NewButtonState()) {
-    if (ps2x.Button(PSB_L3))                                                // l3 - not used
-      Serial.println("L3 pressed");
-    if (ps2x.Button(PSB_R3))                                                // r3 - not used
-      Serial.println("R3 pressed");
-    if (ps2x.Button(PSB_L2))                                                // l2 - not used
-      Serial.println("L2 pressed");
-    if (ps2x.Button(PSB_R2))                                                // r2 - not used
-      Serial.println("R2 pressed");
-    if (ps2x.Button(PSB_TRIANGLE))                                          // ^ - not used
-      Serial.println("Triangle pressed");
-  }
-
   if (ps2x.ButtonPressed(PSB_CIRCLE)) {                                     // o - reset upper pwm
     upSpeed = 0;
     setUpperPwm();
@@ -101,16 +84,6 @@ void loop() {
   if (ps2x.ButtonReleased(PSB_SQUARE))                                      // # - not used
     Serial.println("Square just released");
 
-  if (ps2x.Button(PSB_L1) || ps2x.Button(PSB_R1)) {                         // triggers and analog - not set - base control 
-    Serial.print("Stick Values:");
-    Serial.print(ps2x.Analog(PSS_LY), DEC);
-    Serial.print(",");
-    Serial.print(ps2x.Analog(PSS_LX), DEC);
-    Serial.print(",");
-    Serial.print(ps2x.Analog(PSS_RY), DEC);
-    Serial.print(",");
-    Serial.println(ps2x.Analog(PSS_RX), DEC);
-  }
   delay(50);
 }
 
@@ -177,11 +150,37 @@ void setUpperPwm() {
 
 /*-------| LCD |---------------------------------------------------------------------------*/
 void updateLCD() {
-  lcd.setCursor(0,1);
-  lcd.print("PWM  ");
-  (upSpeed >= 100) ? NULL : lcd.print(" ");
-  (upSpeed >= 10) ? NULL : lcd.print(" ");
-  lcd.print(upSpeed);
+  displayLCD("Motor PWM:", 0, 0);
+  displayLCD(upSpeed, 14, 0, 3);
+}
+
+// clear garbage values w/o updating the entire display
+void cleanLCD(byte end_col, byte end_row) {
+  while (true) {
+    old_col = (old_col >= 14) ? 0 : (old_col + 1);
+    if (old_col == 0) {
+      old_row = (old_row >= 3) ? 0 : (old_row + 1);
+      lcd.setCursor(old_col, old_row);
+    }
+    if ((old_col == end_col) && (old_row == end_row)) return;
+    lcd.print(" ");
+  }
+}
+
+// function to display numbers on the lcdisplay.
+// arguments: the number, the column of it's unit digit, the row,
+// and the max possible no. of digits the value can have.
+void displayLCD(int value, byte unit_col, byte unit_row, byte valueLen) {
+  cleanLCD((unit_col - valueLen) + 1, unit_row);
+  for (int i = valueLen - 1; i > 0; i--)  ((value / int(pow(10, i))) > 0) ? : lcd.print(" ");
+  lcd.print(value);
+}
+
+// function to display string on the screen
+void displayLCD(String s, byte start_col, byte start_row) {
+  cleanLCD(start_col, start_row);
+  old_col += s.length();
+  lcd.print(s);
 }
 
 /*-------| Linear Actuator |---------------------------------------------------------------*/
