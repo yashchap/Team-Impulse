@@ -20,8 +20,10 @@ const int maxSpeed = 150;   // Maximum speed for your motors
 
 const byte rx = 0;    // Defining pin 0 as Rx
 const byte tx = 1;    // Defining pin 1 as Tx
-const byte serialEn = 2;    // Connect UART output enable of LSA08 to pin 2
-const byte junctionPulse = 4;   // Connect JPULSE of LSA08 to pin 4
+const byte serialEn1 = 14;
+const byte serialEn2 = 15;
+const byte jPulse1 = 31;
+const byte jPulse2 = 37;
 
 int lastError = 0;    // Declare a variable to store previous error
 
@@ -36,11 +38,14 @@ typeMotor base_motor[4];
 
 void setup() {
   // lsa stuff
-  pinMode(serialEn, OUTPUT);  // Setting serialEn as digital output pin
-  pinMode(junctionPulse, INPUT);  // Setting junctionPulse as digital input pin
+  pinMode(serialEn1, OUTPUT);  // Setting serialEn as digital output pin
+  pinMode(serialEn2, OUTPUT);  // Setting serialEn as digital output pin
+  pinMode(jPulse1, INPUT);  // Setting junctionPulse as digital input pin
+  pinMode(jPulse2, INPUT);  // Setting junctionPulse as digital input pin
 
   // Setting initial condition of serialEn pin to HIGH
-  digitalWrite(serialEn, HIGH);
+  digitalWrite(serialEn1, HIGH);
+  digitalWrite(serialEn2, HIGH);
 
   Serial.begin(57600);
 
@@ -48,7 +53,7 @@ void setup() {
   for (int i = 0; i < 4; i++) {
     base_motor[i].pwmPin = 6 + i;
     pinMode(base_motor[i].pwmPin, OUTPUT);
-    base_motor[i].dirPin = 22 + i;
+    base_motor[i].dirPin = 42 + (i * 2);
     pinMode(base_motor[i].dirPin, OUTPUT);
   }
   delay(300);  //added delay to give wireless ps2 module some time to startup, before configuring it
@@ -60,35 +65,49 @@ void loop() {
   // when L1 is pressed, enable left analog stick values to control the base motors..
   if (ps2x.Button(PSB_R1)) {
     int RX = ps2x.Analog(PSS_RX);
-    if (RX == 123) {
+    if (RX == 138) {
       Serial.print("Stopped at ");
-      Serial.println(123 - RX);
+      Serial.println(138 - RX);
       stopBot();
     }
-    else if (RX > 123) {
+    else if (RX > 138) {
       Serial.print("Right :: ");
       Serial.print(RX);
       Serial.print(" :: ");
-      walkRight((RX - 123) * (60.000 / 132.000));
-      //      pidWalk();
+      walkRight((RX - 138) * (60.000 / 117.000));
     }
-    else if (RX < 123) {
+    else if (RX < 138) {
       Serial.print("Left :: ");
       Serial.print(RX);
       Serial.print(" :: ");
-      walkLeft((123 - RX) * (60.000 / 123.000));
+      walkLeft((138 - RX) * (60.000 / 138.000));
     }
   }
-  if (walk_direction == HIGH) pidWalk();
+  pidWalk();
   delay(50);
 }
 /*--------------------------------------------------------| PID |--------------------------------------------------------*/
 
 void pidWalk() {
-  digitalWrite(serialEn, LOW);  // Set serialEN to LOW to request UART data
-  while (Serial.available() <= 0);  // Wait for data to be available
-  int positionVal = Serial.read();    // Read incoming data and store in variable positionVal
-  digitalWrite(serialEn, HIGH);   // Stop requesting for UART data
+  if (walk_pwm == 0) {
+    for (int i = 0; i < 4; i++) analogWrite(base_motor[i].pwmPin, walk_pwm);
+    return;
+  }
+  int positionVal = setPoint;
+  switch (walk_direction) {
+    case HIGH:
+      digitalWrite(serialEn1, LOW);
+      while (Serial.available() <= 0);
+      positionVal = Serial.read();
+      digitalWrite(serialEn1, HIGH);
+      break;
+    case LOW:
+      digitalWrite(serialEn2, LOW);
+      while (Serial.available() <= 0);
+      positionVal = Serial.read();
+      digitalWrite(serialEn2, HIGH);
+      break;
+  }
 
   // If no line is detected, stay at the position
   if (positionVal == 255) walk_pwm = 0;
@@ -113,30 +132,27 @@ void pidWalk() {
     if (leftMotorSpeed < 0) leftMotorSpeed = 0;
 
     // Writing the motor speed value as output to hardware motor
-    //    Serial.print(rightMotorSpeed);
-    //    Serial.print("  |  lms  ");
-    //    Serial.println(leftMotorSpeed);
-    if (walk_pwm == 0) {
-      for (int i = 0; i < 4; i++) analogWrite(base_motor[i].pwmPin, walk_pwm);
-    }
-    else {
-      Serial.print("  pv  ");
-      Serial.print(positionVal);
-      Serial.print("  ||  ");
-      Serial.print("  |  ms  ");
-      Serial.print(motorSpeed);
-      Serial.print("  |  rms  ");
-      Serial.print(rightMotorSpeed);
-      Serial.print("  |  lms  ");
-      Serial.println(leftMotorSpeed);
-      for (int i = 1; i < 4; i = i + 2) {
-        digitalWrite(base_motor[i].dirPin, walk_direction);
-        analogWrite(base_motor[i].pwmPin, leftMotorSpeed);
-      }
-      for (int i = 0; i < 4; i = i + 2) {
-        digitalWrite(base_motor[i].dirPin, walk_direction);
-        analogWrite(base_motor[i].pwmPin, rightMotorSpeed);
-      }
+    switch (walk_direction) {
+      case HIGH:
+        for (int i = 0; i < 2; i++) {
+          digitalWrite(base_motor[i].dirPin, walk_direction);
+          analogWrite(base_motor[i].pwmPin, leftMotorSpeed);
+        }
+        for (int i = 2; i < 4; i++) {
+          digitalWrite(base_motor[i].dirPin, walk_direction);
+          analogWrite(base_motor[i].pwmPin, rightMotorSpeed);
+        }
+        break;
+      case LOW:
+        for (int i = 0; i < 2; i++) {
+          digitalWrite(base_motor[i].dirPin, walk_direction);
+          analogWrite(base_motor[i].pwmPin, rightMotorSpeed);
+        }
+        for (int i = 2; i < 4; i++) {
+          digitalWrite(base_motor[i].dirPin, walk_direction);
+          analogWrite(base_motor[i].pwmPin, leftMotorSpeed);
+        }
+        break;
     }
   }
 }
@@ -160,10 +176,6 @@ void walkLeft(int pwm) {
   Serial.println(pwm);
   walk_pwm = pwm;
   walk_direction = LOW;
-  for (int i = 0; i < 4; i++) {
-    digitalWrite(base_motor[i].dirPin, LOW);
-    analogWrite(base_motor[i].pwmPin, pwm);
-  }
 }
 
 /*--------------------------------------------------------| PS2X |--------------------------------------------------------*/
@@ -212,4 +224,3 @@ void configurePS2X() {
   if (error == 1) //skip loop if no controller found
     return;
 }
-
