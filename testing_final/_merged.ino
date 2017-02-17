@@ -1,5 +1,5 @@
 // ps2x lib
-#include <PS2X_lib.h>
+#include <PS2X.h>
 PS2X ps2x;
 
 // lcd lib
@@ -35,7 +35,10 @@ const int act_pwm = 5;                  // H4
 const int act_dir = 40;
 
 const int upper_pwm = 4;                // H3
-int upSpeed = 50;                       // pwm for upper motor is written through this variable
+int upSpeed = 50, last_upSpeed = 100;                       // pwm for upper motor is written through this variable
+
+int z_val = 0;
+byte sum = 0,value = 0;        //sort-of-thigde-logic
 
 const int xpin = A3;                    // x-axis of the accelerometer
 const int ypin = A2;                    // y-axis of the accelerometer
@@ -98,11 +101,16 @@ void loop() {
     moveActuator(LOW, LOW);
   }
 
-  if (ps2x.ButtonPressed(PSB_TRIANGLE)) {
-    calibrationDance();
+  if (ps2x.ButtonPressed(PSB_SQUARE)) {
+    upSpeed = last_upSpeed;
+    setUpperPwm();
   }
-  if (ps2x.ButtonPressed(PSB_CIRCLE)) {                                     // o - reset upper pwm
-    upSpeed = 30;
+  if (ps2x.ButtonPressed(PSB_TRIANGLE)) {
+    resetTime();
+  }
+  if (ps2x.ButtonPressed(PSB_CIRCLE)) {    // o - reset upper pwm
+    last_upSpeed = upSpeed;
+    upSpeed = 0;
     setUpperPwm();
   }
   if (ps2x.NewButtonState(PSB_CROSS)) {                                     // x - pneumatic control
@@ -130,6 +138,8 @@ void loop() {
 
   if (minutes != 0 || seconds != 0) keepTime();
   delay(50);
+
+  //  serialPrint();
 }
 
 /*-------| PS2X |--------------------------------------------------------------------------*/
@@ -162,18 +172,18 @@ void configurePS2X() {
 
   type = ps2x.readType();
   switch (type) {
-    case 0:
-      Serial.println("Unknown Controller type found ");
-      break;
-    case 1:
-      Serial.println("DualShock Controller found ");
-      break;
-    case 2:
-      Serial.println("GuitarHero Controller found ");
-      break;
-    case 3:
-      Serial.println("Wireless Sony DualShock Controller found ");
-      break;
+  case 0:
+    Serial.println("Unknown Controller type found ");
+    break;
+  case 1:
+    Serial.println("DualShock Controller found ");
+    break;
+  case 2:
+    Serial.println("GuitarHero Controller found ");
+    break;
+  case 3:
+    Serial.println("Wireless Sony DualShock Controller found ");
+    break;
   }
   if (error == 1) //skip loop if no controller found
     return;
@@ -196,13 +206,13 @@ void setUpperPwm() {
 
 /*
    |0|0|0|0|0|0|0|0|0|0|1|1|1|1|1|1|
-  c|0|1|2|3|4|5|6|7|8|9|0|1|2|3|4|5|
-  r  ---------------------------------
-  0|M|o|t|o|r| |P|W|M|:| | |#|#|#| |
-  1| | | |X| | | | |Y| | | | |Z| | |
-  2| |#|#|#|#| |#|#|#|#| |#|#|#|#| |
-  3| | |T|i|m|e|r|:| | |#|:|#|#| | |
-*/
+ c|0|1|2|3|4|5|6|7|8|9|0|1|2|3|4|5|
+ r  ---------------------------------
+ 0|M|o|t|o|r| |P|W|M|:| | |#|#|#| |
+ 1| | | |X| | | | |Y| | | | |Z| | |
+ 2| |#|#|#|#| |#|#|#|#| |#|#|#|#| |
+ 3| | |T|i|m|e|r|:| | |#|:|#|#| | |
+ */
 
 void keepTime() {
   current_time = millis() % 1000;
@@ -213,18 +223,28 @@ void keepTime() {
   last_time = current_time;
 }
 
+void resetTime(){
+  minutes = 3;
+  seconds = 0;
+}
+
 void updateLCD() {
-  int x_val = analogRead(xpin), y_val = analogRead(ypin), z_val = analogRead(zpin);
+  if ((current_time) < last_time){
+    z_val = sum/value ;
+    sum = value = 0;
+  }
+  else {
+    sum += 345 - analogRead(zpin);
+    value++;
+    Serial.println(sum);
+  }
+  z_val = ((float)z_val)/1.4;
   displayLCD("Motor PWM:", 0, 0);
   displayLCD(upSpeed, 14, 0, 3);
-  displayLCD("X", 3, 1);
-  displayLCD("Y", 8, 1);
-  displayLCD("Z", 13, 1);
-  displayLCD(x_val, 4, 2, 4);
-  displayLCD(y_val, 9, 2, 4);
-  displayLCD(z_val, 14, 2, 4);
-  displayLCD("Timer:", 2, 3);
-  displayLCD(minutes, seconds, 9, 3, "t");
+  displayLCD("Z:", 8, 1);
+  displayLCD(z_val, 14, 1, 4);
+  displayLCD("-Timer-", 4, 2);
+  displayLCD(minutes, seconds, 5, 3, "t");
 }
 
 void serialPrint() {
@@ -250,6 +270,7 @@ void cleanLCD(byte end_col, byte end_row) {
     }
     if (old_col != 0) lcd.print(" ");
     if ((old_col == end_col) && (old_row == end_row)) {
+      //      Serial.printl(old_col);
       return;
     }
     //    delay(250);
@@ -260,10 +281,20 @@ void cleanLCD(byte end_col, byte end_row) {
 // arguments: the number, the column of it's unit digit, the row,
 // and the max possible no. of digits the value can have.
 void displayLCD(int value, byte unit_col, byte unit_row, byte valueLen) {
-  cleanLCD((unit_col - valueLen) + 1, unit_row);
-  for (int i = valueLen - 1; i > 0; i--)  ((value / int(pow(10, i))) > 0) ? : lcd.print(" ");
-  old_col = unit_col + 1;
-  lcd.print(value);
+  if (value < 0) {
+    cleanLCD((unit_col - valueLen), unit_row);
+    value = abs(value);
+    for (int i = valueLen - 1; i > 0; i--)  ((value / int(pow(10, i))) > 0) ? : lcd.print(" ");
+    old_col = unit_col + 2;
+    lcd.write("-");
+    lcd.print(value);
+  }
+  else {
+    cleanLCD((unit_col - valueLen) + 1, unit_row);
+    for (int i = valueLen - 1; i > 0; i--)  ((value / int(pow(10, i))) > 0) ? : lcd.print(" ");
+    old_col = unit_col + 1;
+    lcd.print(value);
+  }
 }
 
 // function to display string on the screen
@@ -334,3 +365,4 @@ void calibrationDance() {
   }
   stopBot();
 }
+
