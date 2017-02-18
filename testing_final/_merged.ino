@@ -20,16 +20,22 @@ struct hBridge {
   byte dirPin;
 };
 
+// pnuematic output
+int pneumatic_out;
+
 // all 4 motors of the bot's base.
 hBridge base_motor[4];                  // 6, 7 - L - H2; 8, 9 - R - H1;
 
+// adxl variables.
+int z_sum = 0, z_quant = 0;             // for average.
+int z_val = 0;                          // actual value
 
 // pid stuff
 int walk_direction = HIGH;
 byte walk_pwm = 0;
 byte zero_pos = 123;
-const float Kp = 3.67;   // Kp value that you have to change
-const float Kd = 1.3;  // Kd value that you have to change
+const float Kp = 5.0;   // Kp value that you have to change
+const float Kd = 3.0;  // Kd value that you have to change
 const int setPoint = 35;    // Middle point of sensor array
 const int baseSpeed = 120;    // Base speed for your motors
 const int maxSpeed = 220;   // Maximum speed for your motors
@@ -107,12 +113,72 @@ void setup() {
 }
 
 void loop() {
-  // read gamepad. call atleast once a second
-  ps2x.read_gamepad();
-
   // update lcd
   updateLCD();
 
+  // check ps2x state, and control via it.
+  doPS2XStuff();
+
+  // walk with pid
+  pidWalk();
+
+  // read adxl values.
+  readADXL();
+
+  // do stuff that depends on some internal clocktime.
+  doTimedStuff(checkTime());
+}
+
+/*-------| PS2X |--------------------------------------------------------------------------*/
+// function stolen from setup of PS2X_Example.
+void configurePS2X() {
+  int error = 0;
+  byte type = 0;
+  byte vibrate = 0;
+
+  error = ps2x.config_gamepad(PS2_CLK, PS2_CMD, PS2_SEL, PS2_DAT, pressures, rumble);
+  if (error == 0) {
+    Serial.println("Found Controller, configured successfully.");
+    Serial.print("pressures = ");
+    if (pressures)
+      Serial.println("true ");
+    else
+      Serial.println("false");
+    Serial.print("rumble = ");
+    if (rumble)
+      Serial.println("true)");
+    else
+      Serial.println("false");
+  }
+  else if (error == 1)
+    Serial.println("No controller found, check wiring.");
+  else if (error == 2)
+    Serial.println("Controller found but not accepting commands.");
+  else if (error == 3)
+    Serial.println("Controller refusing to enter Pressures mode, may not support it. ");
+
+  type = ps2x.readType();
+  switch (type) {
+    case 0:
+      Serial.println("Unknown Controller type found ");
+      break;
+    case 1:
+      Serial.println("DualShock Controller found ");
+      break;
+    case 2:
+      Serial.println("GuitarHero Controller found ");
+      break;
+    case 3:
+      Serial.println("Wireless Sony DualShock Controller found ");
+      break;
+  }
+  if (error == 1) //skip loop if no controller found
+    return;
+}
+
+void doPS2XStuff() {
+  // read gamepad. call atleast once a second
+  ps2x.read_gamepad();
   if (ps2x.Button(PSB_PAD_UP)) {                                            // up - move actuator up
     moveActuator(HIGH, HIGH);
   }
@@ -166,61 +232,22 @@ void loop() {
       walkLeft((zero_pos - RX) * (120.000 / (float)zero_pos));
     }
   }
-  pidWalk();
-  if (minutes != 0 || seconds != 0) keepTime();
-  delay(50);
 }
 
-/*-------| PS2X |--------------------------------------------------------------------------*/
-// function stolen from setup of PS2X_Example.
-void configurePS2X() {
-  int error = 0;
-  byte type = 0;
-  byte vibrate = 0;
-
-  error = ps2x.config_gamepad(PS2_CLK, PS2_CMD, PS2_SEL, PS2_DAT, pressures, rumble);
-  if (error == 0) {
-    Serial.println("Found Controller, configured successfully.");
-    Serial.print("pressures = ");
-    if (pressures)
-      Serial.println("true ");
-    else
-      Serial.println("false");
-    Serial.print("rumble = ");
-    if (rumble)
-      Serial.println("true)");
-    else
-      Serial.println("false");
-  }
-  else if (error == 1)
-    Serial.println("No controller found, check wiring.");
-  else if (error == 2)
-    Serial.println("Controller found but not accepting commands.");
-  else if (error == 3)
-    Serial.println("Controller refusing to enter Pressures mode, may not support it. ");
-
-  type = ps2x.readType();
-  switch (type) {
-    case 0:
-      Serial.println("Unknown Controller type found ");
-      break;
-    case 1:
-      Serial.println("DualShock Controller found ");
-      break;
-    case 2:
-      Serial.println("GuitarHero Controller found ");
-      break;
-    case 3:
-      Serial.println("Wireless Sony DualShock Controller found ");
-      break;
-  }
-  if (error == 1) //skip loop if no controller found
-    return;
+/*-------| ADXL |--------------------------------------------------------------------------*/
+void readADXL() {
+  z_sum += analogRead(zpin);
+  z_quant++;
 }
 
+void setADXLValue() {
+  if (z_quant == 0) return;
+  z_val = z_sum / z_quant;
+  z_sum = 0;
+  z_quant = 0;
+}
 
 /*-------| Pneumatic Valve |---------------------------------------------------------------*/
-int pneumatic_out;
 void fireDisc() {
   pneumatic_out = (pneumatic_out == LOW) ? HIGH : LOW;
   digitalWrite(pneumatic_pin, pneumatic_out);
@@ -231,8 +258,29 @@ void setUpperPwm() {
   analogWrite(upper_pwm, upSpeed);
 }
 
+/*-------| Timer |-------------------------------------------------------------------------*/
+void doTimedStuff(boolean isTime) {
+  if (!isTime) return;
+  updateTimer();
+  setADXLValue();
+}
+
+boolean checkTime() {
+  current_time = millis() % 1000;
+  boolean timePulse = (current_time < last_time) ? true : false;
+  last_time = current_time;
+  return timePulse;
+}
+
+void updateTimer() {
+  if (minutes == 0 && seconds == 0) return;
+  seconds = (seconds != 0) ? (seconds - 1) : 59;
+  if (seconds == 59) minutes = (minutes != 0) ? (minutes - 1) : 59;
+}
+
 /*-------| LCD |---------------------------------------------------------------------------*/
 
+void updateLCD() {
 /*
    |0|0|0|0|0|0|0|0|0|0|1|1|1|1|1|1|
   c|0|1|2|3|4|5|6|7|8|9|0|1|2|3|4|5|
@@ -242,41 +290,14 @@ void setUpperPwm() {
   2| |#|#|#|#| |#|#|#|#| |#|#|#|#| |
   3| | |T|i|m|e|r|:| | |#|:|#|#| | |
 */
-
-void keepTime() {
-  current_time = millis() % 1000;
-  if ((current_time) < last_time) {
-    seconds = (seconds != 0) ? (seconds - 1) : 59;
-    if (seconds == 59) minutes = (minutes != 0) ? (minutes - 1) : 59;
-  }
-  last_time = current_time;
-}
-
-void updateLCD() {
-  int x_val = analogRead(xpin), y_val = analogRead(ypin), z_val = analogRead(zpin);
   displayLCD("Motor PWM:", 0, 0);
   displayLCD(upSpeed, 14, 0, 3);
   displayLCD("X", 3, 1);
   displayLCD("Y", 8, 1);
   displayLCD("Z", 13, 1);
-  displayLCD(x_val, 4, 2, 4);
-  displayLCD(y_val, 9, 2, 4);
   displayLCD(z_val, 14, 2, 4);
   displayLCD("Timer:", 2, 3);
   displayLCD(minutes, seconds, 9, 3, "t");
-}
-
-void serialPrint() {
-  Serial.print("Motor PWM:  ");
-  Serial.print(upSpeed);
-  Serial.print(" | X: ");
-  Serial.print(analogRead(xpin));
-  Serial.print(" | Y: ");
-  Serial.print(analogRead(ypin));
-  Serial.print(" | Z: ");
-  Serial.print(analogRead(zpin));
-  Serial.print(" | Timer- ");
-  Serial.println("#:##");                                        // Timer dummy
 }
 
 // clear garbage values w/o updating the entire display
@@ -350,25 +371,7 @@ void walkLeft(int pwm) {
   walk_direction = LOW;
 }
 
-void calibrationDance() {
-  for (int j = 0; j < 3; j++) {
-    digitalWrite(base_motor[0].dirPin, HIGH);
-    digitalWrite(base_motor[1].dirPin, HIGH);
-    digitalWrite(base_motor[2].dirPin, LOW);
-    digitalWrite(base_motor[3].dirPin, LOW);
-    for (int i = 0; i < 4; i++) analogWrite(base_motor[i].pwmPin, 150);
-    delay(1000);
-    digitalWrite(base_motor[0].dirPin, LOW);
-    digitalWrite(base_motor[1].dirPin, LOW);
-    digitalWrite(base_motor[2].dirPin, HIGH);
-    digitalWrite(base_motor[3].dirPin, HIGH);
-    for (int i = 0; i < 4; i++) analogWrite(base_motor[i].pwmPin, 150);
-    delay(1000);
-  }
-  stopBot();
-}
-
-/*-------| PID |--------------------------------------------------------------------------*/
+/*-------| PSD |--------------------------------------------------------------------------*/
 void pidWalk() {
   if (walk_pwm == 0) {
     for (int i = 0; i < 4; i++) analogWrite(base_motor[i].pwmPin, walk_pwm);
@@ -408,13 +411,9 @@ void pidWalk() {
     rightMotorSpeed = walk_pwm - motorSpeed;
     leftMotorSpeed = walk_pwm + motorSpeed;
 
-    // If the speed of motor exceed max speed, set the speed to max speed
-    if (rightMotorSpeed > maxSpeed) rightMotorSpeed = maxSpeed;
-    if (leftMotorSpeed > maxSpeed) leftMotorSpeed = maxSpeed;
-
-    // If the speed of motor is negative, set it to 0
-    if (rightMotorSpeed < 0) rightMotorSpeed = 0;
-    if (leftMotorSpeed < 0) leftMotorSpeed = 0;
+    // limit the values to a specific range (0 <= rms/lms <= maxSpeed)
+    rightMotorSpeed = (rightMotorSpeed > maxSpeed) ? maxSpeed : (rightMotorSpeed < 0 ? 0 : rightMotorSpeed);
+    leftMotorSpeed = (leftMotorSpeed > maxSpeed) ? maxSpeed : (leftMotorSpeed < 0 ? 0 : leftMotorSpeed);
 
     // Writing the motor speed value as output to hardware motor
     switch (walk_direction) {
@@ -441,5 +440,3 @@ void pidWalk() {
     }
   }
 }
-
-
