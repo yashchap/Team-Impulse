@@ -1,5 +1,5 @@
 // ps2x lib
-#include <PS2X.h>
+#include <PS2X_lib.h>
 PS2X ps2x;
 
 // lcd lib
@@ -14,14 +14,38 @@ LiquidCrystal lcd(34, 30, 28, 26, 24, 22);
 #define pressures   false
 #define rumble      false
 
-// data structure for a motor controlled by one of our H-bridges.
-struct typeMotor {
+// data structure for anything controlled by one of our H-bridges.
+struct hBridge {
   byte pwmPin;
   byte dirPin;
 };
 
 // all 4 motors of the bot's base.
-typeMotor base_motor[4];
+hBridge base_motor[4];                  // 6, 7 - L - H2; 8, 9 - R - H1;
+
+
+// pid stuff
+int walk_direction = HIGH;
+byte walk_pwm = 0;
+byte zero_pos = 123;
+const float Kp = 3.67;   // Kp value that you have to change
+const float Kd = 1.3;  // Kd value that you have to change
+const int setPoint = 35;    // Middle point of sensor array
+const int baseSpeed = 120;    // Base speed for your motors
+const int maxSpeed = 220;   // Maximum speed for your motors
+int positionVal = 0;
+int rightMotorSpeed = 0;
+int leftMotorSpeed = 0;
+
+const byte rx = 0;    // Defining pin 0 as Rx
+const byte tx = 1;    // Defining pin 1 as Tx
+const byte serialEn1 = 14;
+const byte serialEn2 = 15;
+const byte jPulse1 = 31;
+const byte jPulse2 = 37;
+
+int lastError = 0;    // Declare a variable to store previous error
+
 
 int pneumatic_pin = 49;                 // R5
 
@@ -31,20 +55,28 @@ byte minutes = 3, seconds = 0;
 int last_time = 1000;
 int current_time = 0;
 
+// define hBridge for actuator movement.
 const int act_pwm = 5;                  // H4
 const int act_dir = 40;
 
 const int upper_pwm = 4;                // H3
-int upSpeed = 50, last_upSpeed = 100;                       // pwm for upper motor is written through this variable
-
-int z_val = 0;
-byte sum = 0,value = 0;        //sort-of-thigde-logic
+int upSpeed = 50;                       // pwm for upper motor is written through this variable
 
 const int xpin = A3;                    // x-axis of the accelerometer
 const int ypin = A2;                    // y-axis of the accelerometer
 const int zpin = A1;                    // z-axis of the accelerometer
 
 void setup() {
+  // lsa stuff
+  pinMode(serialEn1, OUTPUT);  // Setting serialEn as digital output pin
+  pinMode(serialEn2, OUTPUT);  // Setting serialEn as digital output pin
+  pinMode(jPulse1, INPUT);  // Setting junctionPulse as digital input pin
+  pinMode(jPulse2, INPUT);  // Setting junctionPulse as digital input pin
+
+  // Setting initial condition of serialEn pin to HIGH
+  digitalWrite(serialEn1, HIGH);
+  digitalWrite(serialEn2, HIGH);
+
   // begin lcd communications
   lcd.begin(16, 4);
 
@@ -61,7 +93,7 @@ void setup() {
   digitalWrite(act_pwm, LOW);
   digitalWrite(act_dir, HIGH);
 
-  // initialize base motors. pwm pins = 6, 7, 8, 9. dir pins = 42, 44, 46, 48.
+  // initialize base motors. pwm pins = 6, 7, 8, 9. dir pins = 22, 23, 24, 25.
   for (int i = 0; i < 4; i++) {
     base_motor[i].pwmPin = 6 + i;
     pinMode(base_motor[i].pwmPin, OUTPUT);
@@ -101,16 +133,11 @@ void loop() {
     moveActuator(LOW, LOW);
   }
 
-  if (ps2x.ButtonPressed(PSB_SQUARE)) {
-    upSpeed = last_upSpeed;
-    setUpperPwm();
+  if (ps2x.ButtonPressed(PSB_TRIANGLE)) {                                     // o - reset upper pwm
+    stopBot();
   }
-  if (ps2x.ButtonPressed(PSB_TRIANGLE)) {
-    resetTime();
-  }
-  if (ps2x.ButtonPressed(PSB_CIRCLE)) {    // o - reset upper pwm
-    last_upSpeed = upSpeed;
-    upSpeed = 0;
+  if (ps2x.ButtonPressed(PSB_CIRCLE)) {                                     // o - reset upper pwm
+    upSpeed = 30;
     setUpperPwm();
   }
   if (ps2x.NewButtonState(PSB_CROSS)) {                                     // x - pneumatic control
@@ -118,28 +145,30 @@ void loop() {
     fireDisc();
   }
 
+  // when L1 is pressed, enable left analog stick values to control the base motors..
   if (ps2x.Button(PSB_R1)) {
     int RX = ps2x.Analog(PSS_RX);
-    Serial.println(RX);
-    if (RX == 123) {
+    if (RX == zero_pos) {
       Serial.print("Stopped at ");
-      Serial.println(123 - RX);
+      Serial.println(zero_pos - RX);
       stopBot();
     }
-    else if (RX > 123) {
-      Serial.print("Right at ");
-      walkRight((RX - 123) * (100.000 / 123.000));
+    else if (RX > zero_pos) {
+      Serial.print("Right :: ");
+      Serial.print(RX);
+      Serial.print(" :: ");
+      walkRight((RX - zero_pos) * (120.000 / (255.000 - (float)zero_pos)));
     }
-    else if (RX < 123) {
-      Serial.print("Left at ");
-      walkLeft((123 - RX) * (100.000 / 123.000));
+    else if (RX < zero_pos) {
+      Serial.print("Left :: ");
+      Serial.print(RX);
+      Serial.print(" :: ");
+      walkLeft((zero_pos - RX) * (120.000 / (float)zero_pos));
     }
   }
-
+  pidWalk();
   if (minutes != 0 || seconds != 0) keepTime();
   delay(50);
-
-  //  serialPrint();
 }
 
 /*-------| PS2X |--------------------------------------------------------------------------*/
@@ -172,18 +201,18 @@ void configurePS2X() {
 
   type = ps2x.readType();
   switch (type) {
-  case 0:
-    Serial.println("Unknown Controller type found ");
-    break;
-  case 1:
-    Serial.println("DualShock Controller found ");
-    break;
-  case 2:
-    Serial.println("GuitarHero Controller found ");
-    break;
-  case 3:
-    Serial.println("Wireless Sony DualShock Controller found ");
-    break;
+    case 0:
+      Serial.println("Unknown Controller type found ");
+      break;
+    case 1:
+      Serial.println("DualShock Controller found ");
+      break;
+    case 2:
+      Serial.println("GuitarHero Controller found ");
+      break;
+    case 3:
+      Serial.println("Wireless Sony DualShock Controller found ");
+      break;
   }
   if (error == 1) //skip loop if no controller found
     return;
@@ -206,13 +235,13 @@ void setUpperPwm() {
 
 /*
    |0|0|0|0|0|0|0|0|0|0|1|1|1|1|1|1|
- c|0|1|2|3|4|5|6|7|8|9|0|1|2|3|4|5|
- r  ---------------------------------
- 0|M|o|t|o|r| |P|W|M|:| | |#|#|#| |
- 1| | | |X| | | | |Y| | | | |Z| | |
- 2| |#|#|#|#| |#|#|#|#| |#|#|#|#| |
- 3| | |T|i|m|e|r|:| | |#|:|#|#| | |
- */
+  c|0|1|2|3|4|5|6|7|8|9|0|1|2|3|4|5|
+  r  ---------------------------------
+  0|M|o|t|o|r| |P|W|M|:| | |#|#|#| |
+  1| | | |X| | | | |Y| | | | |Z| | |
+  2| |#|#|#|#| |#|#|#|#| |#|#|#|#| |
+  3| | |T|i|m|e|r|:| | |#|:|#|#| | |
+*/
 
 void keepTime() {
   current_time = millis() % 1000;
@@ -223,28 +252,18 @@ void keepTime() {
   last_time = current_time;
 }
 
-void resetTime(){
-  minutes = 3;
-  seconds = 0;
-}
-
 void updateLCD() {
-  if ((current_time) < last_time){
-    z_val = sum/value ;
-    sum = value = 0;
-  }
-  else {
-    sum += 345 - analogRead(zpin);
-    value++;
-    Serial.println(sum);
-  }
-  z_val = ((float)z_val)/1.4;
+  int x_val = analogRead(xpin), y_val = analogRead(ypin), z_val = analogRead(zpin);
   displayLCD("Motor PWM:", 0, 0);
   displayLCD(upSpeed, 14, 0, 3);
-  displayLCD("Z:", 8, 1);
-  displayLCD(z_val, 14, 1, 4);
-  displayLCD("-Timer-", 4, 2);
-  displayLCD(minutes, seconds, 5, 3, "t");
+  displayLCD("X", 3, 1);
+  displayLCD("Y", 8, 1);
+  displayLCD("Z", 13, 1);
+  displayLCD(x_val, 4, 2, 4);
+  displayLCD(y_val, 9, 2, 4);
+  displayLCD(z_val, 14, 2, 4);
+  displayLCD("Timer:", 2, 3);
+  displayLCD(minutes, seconds, 9, 3, "t");
 }
 
 void serialPrint() {
@@ -270,7 +289,6 @@ void cleanLCD(byte end_col, byte end_row) {
     }
     if (old_col != 0) lcd.print(" ");
     if ((old_col == end_col) && (old_row == end_row)) {
-      //      Serial.printl(old_col);
       return;
     }
     //    delay(250);
@@ -281,20 +299,10 @@ void cleanLCD(byte end_col, byte end_row) {
 // arguments: the number, the column of it's unit digit, the row,
 // and the max possible no. of digits the value can have.
 void displayLCD(int value, byte unit_col, byte unit_row, byte valueLen) {
-  if (value < 0) {
-    cleanLCD((unit_col - valueLen), unit_row);
-    value = abs(value);
-    for (int i = valueLen - 1; i > 0; i--)  ((value / int(pow(10, i))) > 0) ? : lcd.print(" ");
-    old_col = unit_col + 2;
-    lcd.write("-");
-    lcd.print(value);
-  }
-  else {
-    cleanLCD((unit_col - valueLen) + 1, unit_row);
-    for (int i = valueLen - 1; i > 0; i--)  ((value / int(pow(10, i))) > 0) ? : lcd.print(" ");
-    old_col = unit_col + 1;
-    lcd.print(value);
-  }
+  cleanLCD((unit_col - valueLen) + 1, unit_row);
+  for (int i = valueLen - 1; i > 0; i--)  ((value / int(pow(10, i))) > 0) ? : lcd.print(" ");
+  old_col = unit_col + 1;
+  lcd.print(value);
 }
 
 // function to display string on the screen
@@ -324,28 +332,22 @@ void moveActuator(int pwm, int dir) {
 /*-------| Bot Base. |---------------------------------------------------------------------*/
 // stop the bot.
 void stopBot() {
-  for (int i = 0; i < 4; i++) {
-    digitalWrite(base_motor[i].dirPin, HIGH);
-    analogWrite(base_motor[i].pwmPin, 0);
-  }
+  walk_pwm = 0;
+  walk_direction = LOW;
 }
 
 // move the bot in the right direction.
 void walkRight(int pwm) {
   Serial.println(pwm);
-  for (int i = 0; i < 4; i++) {
-    digitalWrite(base_motor[i].dirPin, HIGH);
-    analogWrite(base_motor[i].pwmPin, pwm);
-  }
+  walk_pwm = pwm;
+  walk_direction = HIGH;
 }
 
 // move the bot in left direction.
 void walkLeft(int pwm) {
   Serial.println(pwm);
-  for (int i = 0; i < 4; i++) {
-    digitalWrite(base_motor[i].dirPin, LOW);
-    analogWrite(base_motor[i].pwmPin, pwm);
-  }
+  walk_pwm = pwm;
+  walk_direction = LOW;
 }
 
 void calibrationDance() {
@@ -365,4 +367,79 @@ void calibrationDance() {
   }
   stopBot();
 }
+
+/*-------| PID |--------------------------------------------------------------------------*/
+void pidWalk() {
+  if (walk_pwm == 0) {
+    for (int i = 0; i < 4; i++) analogWrite(base_motor[i].pwmPin, walk_pwm);
+    return;
+  }
+  switch (walk_direction) {
+    case LOW:
+      digitalWrite(serialEn1, LOW);
+      while (Serial.available() <= 0);
+      Serial.print("x: ");
+      positionVal = Serial.read();
+      Serial.println(positionVal);
+      digitalWrite(serialEn1, HIGH);
+      break;
+    case HIGH:
+      digitalWrite(serialEn2, LOW);
+      //      Serial.println("-");
+      while (Serial.available() <= 0);
+      Serial.print("x: ");
+      positionVal = Serial.read();
+      Serial.println(positionVal);
+      digitalWrite(serialEn2, HIGH);
+      break;
+  }
+
+  // If no line is detected, stay at the position
+  if (positionVal == 255) walk_pwm = 0;
+
+  // Else if line detected, calculate the motor speed and apply
+  else {
+    int error = positionVal - setPoint;   // Calculate the deviation from position to the set point
+    int motorSpeed = Kp * (float)error + Kd * (float)(error - lastError);   // Applying formula of PID
+    lastError = error;    // Store current error as previous error for next iteration use
+
+    // Adjust the motor speed based on calculated value
+    // You might need to interchange the + and - sign if your robot move in opposite direction
+    rightMotorSpeed = walk_pwm - motorSpeed;
+    leftMotorSpeed = walk_pwm + motorSpeed;
+
+    // If the speed of motor exceed max speed, set the speed to max speed
+    if (rightMotorSpeed > maxSpeed) rightMotorSpeed = maxSpeed;
+    if (leftMotorSpeed > maxSpeed) leftMotorSpeed = maxSpeed;
+
+    // If the speed of motor is negative, set it to 0
+    if (rightMotorSpeed < 0) rightMotorSpeed = 0;
+    if (leftMotorSpeed < 0) leftMotorSpeed = 0;
+
+    // Writing the motor speed value as output to hardware motor
+    switch (walk_direction) {
+      case HIGH:
+        for (int i = 0; i < 2; i++) {
+          digitalWrite(base_motor[i].dirPin, walk_direction);
+          analogWrite(base_motor[i].pwmPin, leftMotorSpeed);
+        }
+        for (int i = 2; i < 4; i++) {
+          digitalWrite(base_motor[i].dirPin, walk_direction);
+          analogWrite(base_motor[i].pwmPin, rightMotorSpeed);
+        }
+        break;
+      case LOW:
+        for (int i = 0; i < 2; i++) {
+          digitalWrite(base_motor[i].dirPin, walk_direction);
+          analogWrite(base_motor[i].pwmPin, rightMotorSpeed);
+        }
+        for (int i = 2; i < 4; i++) {
+          digitalWrite(base_motor[i].dirPin, walk_direction);
+          analogWrite(base_motor[i].pwmPin, leftMotorSpeed);
+        }
+        break;
+    }
+  }
+}
+
 
