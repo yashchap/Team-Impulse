@@ -1,9 +1,11 @@
-#include <PS2X_lib.h>  //for v1.6
+// ps2x lib
+#include <PS2X_lib.h>
 PS2X ps2x;
 
 // lcd lib
 #include <LiquidCrystal.h>
 LiquidCrystal lcd(34, 30, 28, 26, 24, 22);
+
 
 #define PS2_DAT        13
 #define PS2_CMD        12
@@ -12,21 +14,24 @@ LiquidCrystal lcd(34, 30, 28, 26, 24, 22);
 #define pressures   false
 #define rumble      false
 
+// data structure for anything controlled by one of our H-bridges.
+struct hBridge {
+  byte pwmPin;
+  byte dirPin;
+};
+
+// all 4 motors of the bot's base.
+hBridge base_motor[4];                  // 6, 7 - L - H2; 8, 9 - R - H1;
+
+// pid stuff
 int walk_direction = HIGH;
 byte walk_pwm = 0;
-
-// lcd variables
-// walk-direction
-// rightMotorSpeed
-// leftMotorSpeed
-byte old_col = 0, old_row = 0;          // data persistance for lcd functions
-
-// pid stuff.
-const float Kp = 3.67;   // Kp value that you have to change
-const float Kd = 1.3;  // Kd value that you have to change
+byte zero_pos = 123;
+const float Kp = 5.0;   // Kp value that you have to change
+const float Kd = 3.0;  // Kd value that you have to change
 const int setPoint = 35;    // Middle point of sensor array
-const int baseSpeed = 60;    // Base speed for your motors
-const int maxSpeed = 150;   // Maximum speed for your motors
+const int baseSpeed = 120;    // Base speed for your motors
+const int maxSpeed = 220;   // Maximum speed for your motors
 int positionVal = 0;
 int rightMotorSpeed = 0;
 int leftMotorSpeed = 0;
@@ -40,14 +45,25 @@ const byte jPulse2 = 37;
 
 int lastError = 0;    // Declare a variable to store previous error
 
-// data structure for a motor controlled by one of our H-bridges.
-struct typeMotor {
-  byte pwmPin;
-  byte dirPin;
-};
 
-// all 4 motors of the bot's base.
-typeMotor base_motor[4];                                      // 6, 7 - L - H2; 8, 9 - R - H1;
+int pneumatic_pin = 49;                 // R5
+
+byte old_col = 0, old_row = 0;          // data persistance for lcd functions
+
+byte minutes = 3, seconds = 0;
+int last_time = 1000;
+int current_time = 0;
+
+// define hBridge for actuator movement.
+const int act_pwm = 5;                  // H4
+const int act_dir = 40;
+
+const int upper_pwm = 4;                // H3
+int upSpeed = 50;                       // pwm for upper motor is written through this variable
+
+const int xpin = A3;                    // x-axis of the accelerometer
+const int ypin = A2;                    // y-axis of the accelerometer
+const int zpin = A1;                    // z-axis of the accelerometer
 
 void setup() {
   // lsa stuff
@@ -65,6 +81,17 @@ void setup() {
 
   Serial.begin(57600);
 
+  // set pin modes
+  pinMode(upper_pwm, OUTPUT);
+  pinMode(pneumatic_pin, OUTPUT);
+  pinMode(xpin, INPUT);
+  pinMode(ypin, INPUT);
+  pinMode(zpin, INPUT);
+  pinMode(act_pwm, OUTPUT);
+  pinMode(act_dir, OUTPUT);
+  digitalWrite(act_pwm, LOW);
+  digitalWrite(act_dir, HIGH);
+
   // initialize base motors. pwm pins = 6, 7, 8, 9. dir pins = 22, 23, 24, 25.
   for (int i = 0; i < 4; i++) {
     base_motor[i].pwmPin = 6 + i;
@@ -72,16 +99,49 @@ void setup() {
     base_motor[i].dirPin = 42 + (i * 2);
     pinMode(base_motor[i].dirPin, OUTPUT);
   }
-  delay(300);  //added delay to give wireless ps2 module some time to startup, before configuring it
+
+  // wait for ps2 to boot
+  delay(300);
   configurePS2X();
 }
 
-byte zero_pos = 123;
 void loop() {
+  // read gamepad. call atleast once a second
+  ps2x.read_gamepad();
+
+  // update lcd
   updateLCD();
-  ps2x.read_gamepad(); // read controller.
-  if (ps2x.ButtonPressed(PSB_CIRCLE)) {                                     // o - reset upper pwm
+
+  if (ps2x.Button(PSB_PAD_UP)) {                                            // up - move actuator up
+    moveActuator(HIGH, HIGH);
+  }
+  if (ps2x.Button(PSB_PAD_RIGHT)) {                                         // right - increase upper pwm
+    upSpeed++;
+    setUpperPwm();
+    delay(15);
+  }
+  if (ps2x.Button(PSB_PAD_LEFT)) {                                          // left - decrease upper pwm
+    upSpeed--;
+    setUpperPwm();
+    delay(15);
+  }
+  if (ps2x.Button(PSB_PAD_DOWN)) {                                          // down - move actuator down
+    moveActuator(HIGH, LOW);
+  }
+  if (!ps2x.Button(PSB_PAD_UP) && !ps2x.Button(PSB_PAD_DOWN)) {
+    moveActuator(LOW, LOW);
+  }
+
+  if (ps2x.ButtonPressed(PSB_TRIANGLE)) {                                     // o - reset upper pwm
     stopBot();
+  }
+  if (ps2x.ButtonPressed(PSB_CIRCLE)) {                                     // o - reset upper pwm
+    upSpeed = 30;
+    setUpperPwm();
+  }
+  if (ps2x.NewButtonState(PSB_CROSS)) {                                     // x - pneumatic control
+    //will be TRUE if button was JUST pressed OR released
+    fireDisc();
   }
 
   // when L1 is pressed, enable left analog stick values to control the base motors..
@@ -96,119 +156,21 @@ void loop() {
       Serial.print("Right :: ");
       Serial.print(RX);
       Serial.print(" :: ");
-      walkRight((RX - zero_pos) * (60.000 / (255.000 - (float)zero_pos)));
+      walkRight((RX - zero_pos) * (120.000 / (255.000 - (float)zero_pos)));
     }
     else if (RX < zero_pos) {
       Serial.print("Left :: ");
       Serial.print(RX);
       Serial.print(" :: ");
-      walkLeft((zero_pos - RX) * (60.000 / (float)zero_pos));
+      walkLeft((zero_pos - RX) * (120.000 / (float)zero_pos));
     }
-    //    Serial.println("|");
   }
-  //  Serial.println("*");
-  //  if (walk_direction == LOW)
   pidWalk();
-  //  Serial.println("x");
+  if (minutes != 0 || seconds != 0) keepTime();
   delay(50);
 }
 
-/*--------------------------------------------------------| PID |--------------------------------------------------------*/
-void pidWalk() {
-  if (walk_pwm == 0) {
-    for (int i = 0; i < 4; i++) analogWrite(base_motor[i].pwmPin, walk_pwm);
-    return;
-  }
-  switch (walk_direction) {
-    case LOW:
-      digitalWrite(serialEn1, LOW);
-      while (Serial.available() <= 0);
-      Serial.print("x: ");
-      positionVal = Serial.read();
-      Serial.println(positionVal);
-      digitalWrite(serialEn1, HIGH);
-      break;
-    case HIGH:
-      digitalWrite(serialEn2, LOW);
-      //      Serial.println("-");
-      while (Serial.available() <= 0);
-      Serial.print("x: ");
-      positionVal = Serial.read();
-      Serial.println(positionVal);
-      digitalWrite(serialEn2, HIGH);
-      break;
-  }
-
-  // If no line is detected, stay at the position
-  if (positionVal == 255) walk_pwm = 0;
-
-  // Else if line detected, calculate the motor speed and apply
-  else {
-    int error = positionVal - setPoint;   // Calculate the deviation from position to the set point
-    int motorSpeed = Kp * (float)error + Kd * (float)(error - lastError);   // Applying formula of PID
-    lastError = error;    // Store current error as previous error for next iteration use
-
-    // Adjust the motor speed based on calculated value
-    // You might need to interchange the + and - sign if your robot move in opposite direction
-    rightMotorSpeed = walk_pwm - motorSpeed;
-    leftMotorSpeed = walk_pwm + motorSpeed;
-
-    // If the speed of motor exceed max speed, set the speed to max speed
-    if (rightMotorSpeed > maxSpeed) rightMotorSpeed = maxSpeed;
-    if (leftMotorSpeed > maxSpeed) leftMotorSpeed = maxSpeed;
-
-    // If the speed of motor is negative, set it to 0
-    if (rightMotorSpeed < 0) rightMotorSpeed = 0;
-    if (leftMotorSpeed < 0) leftMotorSpeed = 0;
-
-    // Writing the motor speed value as output to hardware motor
-    switch (walk_direction) {
-      case HIGH:
-        for (int i = 0; i < 2; i++) {
-          digitalWrite(base_motor[i].dirPin, walk_direction);
-          analogWrite(base_motor[i].pwmPin, leftMotorSpeed);
-        }
-        for (int i = 2; i < 4; i++) {
-          digitalWrite(base_motor[i].dirPin, walk_direction);
-          analogWrite(base_motor[i].pwmPin, rightMotorSpeed);
-        }
-        break;
-      case LOW:
-        for (int i = 0; i < 2; i++) {
-          digitalWrite(base_motor[i].dirPin, walk_direction);
-          analogWrite(base_motor[i].pwmPin, rightMotorSpeed);
-        }
-        for (int i = 2; i < 4; i++) {
-          digitalWrite(base_motor[i].dirPin, walk_direction);
-          analogWrite(base_motor[i].pwmPin, leftMotorSpeed);
-        }
-        break;
-    }
-  }
-}
-
-/*--------------------------------------------------------| Bot Base. |--------------------------------------------------------*/
-// stop the bot.
-void stopBot() {
-  walk_pwm = 0;
-  walk_direction = LOW;
-}
-
-// move the bot in the right direction.
-void walkRight(int pwm) {
-  Serial.println(pwm);
-  walk_pwm = pwm;
-  walk_direction = HIGH;
-}
-
-// move the bot in left direction.
-void walkLeft(int pwm) {
-  Serial.println(pwm);
-  walk_pwm = pwm;
-  walk_direction = LOW;
-}
-
-/*--------------------------------------------------------| PS2X |--------------------------------------------------------*/
+/*-------| PS2X |--------------------------------------------------------------------------*/
 // function stolen from setup of PS2X_Example.
 void configurePS2X() {
   int error = 0;
@@ -255,37 +217,54 @@ void configurePS2X() {
     return;
 }
 
-/*-------LCD---------------------------------------------------------------------------------------*/
+
+/*-------| Pneumatic Valve |---------------------------------------------------------------*/
+int pneumatic_out;
+void fireDisc() {
+  pneumatic_out = (pneumatic_out == LOW) ? HIGH : LOW;
+  digitalWrite(pneumatic_pin, pneumatic_out);
+}
+
+/*-------| Upper PWM |---------------------------------------------------------------------*/
+void setUpperPwm() {
+  analogWrite(upper_pwm, upSpeed);
+}
+
+/*-------| LCD |---------------------------------------------------------------------------*/
+
 /*
    |0|0|0|0|0|0|0|0|0|0|1|1|1|1|1|1|
   c|0|1|2|3|4|5|6|7|8|9|0|1|2|3|4|5|
   r  ---------------------------------
-  0|P|V|:| |#|#| | |W|D|:| |H| | | |
-  1|M|S|:| |L| |#|#|#| |R| |#|#|#| |
-  2| | | | | | |P|W|M|:| | |#|#|#| |
-  3| | | | | | | | | | | | | | | | |
+  0|M|o|t|o|r| |P|W|M|:| | |#|#|#| |
+  1| | | |X| | | | |Y| | | | |Z| | |
+  2| |#|#|#|#| |#|#|#|#| |#|#|#|#| |
+  3| | |T|i|m|e|r|:| | |#|:|#|#| | |
 */
 
-void updateLCD() {
-  displayLCD("PV:", 0, 0);
-  displayLCD(positionVal, 5, 0, 2);
-  displayLCD("WD:", 8, 0);
-  switch (walk_direction) {
-    case HIGH:
-      displayLCD("H", 12, 0);
-      break;
-    case LOW:
-      displayLCD("L", 12, 0);
-      break;
+void keepTime() {
+  current_time = millis() % 1000;
+  if ((current_time) < last_time) {
+    seconds = (seconds != 0) ? (seconds - 1) : 59;
+    if (seconds == 59) minutes = (minutes != 0) ? (minutes - 1) : 59;
   }
-  displayLCD("MS:", 0, 1);
-  displayLCD("L", 4, 1);
-  displayLCD(leftMotorSpeed, 8, 1, 3);
-  displayLCD("R", 10, 1);
-  displayLCD(rightMotorSpeed, 14, 1, 3);
-  displayLCD("PWM:", 6, 2);
-  displayLCD(walk_pwm, 14, 2, 3);
+  last_time = current_time;
 }
+
+void updateLCD() {
+  int x_val = analogRead(xpin), y_val = analogRead(ypin), z_val = analogRead(zpin);
+  displayLCD("Motor PWM:", 0, 0);
+  displayLCD(upSpeed, 14, 0, 3);
+  displayLCD("X", 3, 1);
+  displayLCD("Y", 8, 1);
+  displayLCD("Z", 13, 1);
+  displayLCD(x_val, 4, 2, 4);
+  displayLCD(y_val, 9, 2, 4);
+  displayLCD(z_val, 14, 2, 4);
+  displayLCD("Timer:", 2, 3);
+  displayLCD(minutes, seconds, 9, 3, "t");
+}
+
 // clear garbage values w/o updating the entire display
 void cleanLCD(byte end_col, byte end_row) {
   while (true) {
@@ -328,4 +307,101 @@ void displayLCD(int minutes, int seconds, byte start_col, byte start_row, String
   lcd.print(":");
   (seconds < 10) ? lcd.print("0") : NULL;
   lcd.print(seconds);
+}
+
+/*-------| Linear Actuator |---------------------------------------------------------------*/
+void moveActuator(int pwm, int dir) {
+  digitalWrite(act_pwm, pwm);
+  digitalWrite(act_dir, dir);
+}
+
+/*-------| Bot Base. |---------------------------------------------------------------------*/
+// stop the bot.
+void stopBot() {
+  walk_pwm = 0;
+  walk_direction = LOW;
+}
+
+// move the bot in the right direction.
+void walkRight(int pwm) {
+  Serial.println(pwm);
+  walk_pwm = pwm;
+  walk_direction = HIGH;
+}
+
+// move the bot in left direction.
+void walkLeft(int pwm) {
+  Serial.println(pwm);
+  walk_pwm = pwm;
+  walk_direction = LOW;
+}
+
+/*-------| PSD |--------------------------------------------------------------------------*/
+void pidWalk() {
+  if (walk_pwm == 0) {
+    for (int i = 0; i < 4; i++) analogWrite(base_motor[i].pwmPin, walk_pwm);
+    return;
+  }
+  switch (walk_direction) {
+    case LOW:
+      digitalWrite(serialEn1, LOW);
+      while (Serial.available() <= 0);
+      Serial.print("x: ");
+      positionVal = Serial.read();
+      Serial.println(positionVal);
+      digitalWrite(serialEn1, HIGH);
+      break;
+    case HIGH:
+      digitalWrite(serialEn2, LOW);
+      //      Serial.println("-");
+      while (Serial.available() <= 0);
+      Serial.print("x: ");
+      positionVal = Serial.read();
+      Serial.println(positionVal);
+      digitalWrite(serialEn2, HIGH);
+      break;
+  }
+
+  // If no line is detected, stay at the position
+  if (positionVal == 255) walk_pwm = 0;
+
+  // Else if line detected, calculate the motor speed and apply
+  else {
+    int error = positionVal - setPoint;   // Calculate the deviation from position to the set point
+    int motorSpeed = Kp * (float)error + Kd * (float)(error - lastError);   // Applying formula of PID
+    lastError = error;    // Store current error as previous error for next iteration use
+
+    // Adjust the motor speed based on calculated value
+    // You might need to interchange the + and - sign if your robot move in opposite direction
+    rightMotorSpeed = walk_pwm - motorSpeed;
+    leftMotorSpeed = walk_pwm + motorSpeed;
+
+    // limit the values to a specific range (0 <= rms/lms <= maxSpeed)
+    rightMotorSpeed = (rightMotorSpeed > maxSpeed) ? maxSpeed : (rightMotorSpeed < 0 ? 0 : rightMotorSpeed);
+    leftMotorSpeed = (leftMotorSpeed > maxSpeed) ? maxSpeed : (leftMotorSpeed < 0 ? 0 : leftMotorSpeed);
+
+    // Writing the motor speed value as output to hardware motor
+    switch (walk_direction) {
+      case HIGH:
+        for (int i = 0; i < 2; i++) {
+          digitalWrite(base_motor[i].dirPin, walk_direction);
+          analogWrite(base_motor[i].pwmPin, leftMotorSpeed);
+        }
+        for (int i = 2; i < 4; i++) {
+          digitalWrite(base_motor[i].dirPin, walk_direction);
+          analogWrite(base_motor[i].pwmPin, rightMotorSpeed);
+        }
+        break;
+      case LOW:
+        for (int i = 0; i < 2; i++) {
+          digitalWrite(base_motor[i].dirPin, walk_direction);
+          analogWrite(base_motor[i].pwmPin, rightMotorSpeed);
+        }
+        for (int i = 2; i < 4; i++) {
+          digitalWrite(base_motor[i].dirPin, walk_direction);
+          analogWrite(base_motor[i].pwmPin, leftMotorSpeed);
+        }
+        break;
+    }
+  }
 }
