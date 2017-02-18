@@ -1,15 +1,25 @@
 #include <PS2X_lib.h>  //for v1.6
 PS2X ps2x;
 
+// lcd lib
+#include <LiquidCrystal.h>
+LiquidCrystal lcd(34, 30, 28, 26, 24, 22);
+
 #define PS2_DAT        13
-#define PS2_CMD        11
-#define PS2_SEL        10
-#define PS2_CLK        12
+#define PS2_CMD        12
+#define PS2_SEL        11
+#define PS2_CLK        10
 #define pressures   false
 #define rumble      false
 
 int walk_direction = HIGH;
 byte walk_pwm = 0;
+
+// lcd variables
+// walk-direction
+// rightMotorSpeed
+// leftMotorSpeed
+byte old_col = 0, old_row = 0;          // data persistance for lcd functions
 
 // pid stuff.
 const float Kp = 3.67;   // Kp value that you have to change
@@ -17,6 +27,9 @@ const float Kd = 1.3;  // Kd value that you have to change
 const int setPoint = 35;    // Middle point of sensor array
 const int baseSpeed = 60;    // Base speed for your motors
 const int maxSpeed = 150;   // Maximum speed for your motors
+int positionVal = 0;
+int rightMotorSpeed = 0;
+int leftMotorSpeed = 0;
 
 const byte rx = 0;    // Defining pin 0 as Rx
 const byte tx = 1;    // Defining pin 1 as Tx
@@ -34,7 +47,7 @@ struct typeMotor {
 };
 
 // all 4 motors of the bot's base.
-typeMotor base_motor[4];
+typeMotor base_motor[4];                                      // 6, 7 - L - H2; 8, 9 - R - H1;
 
 void setup() {
   // lsa stuff
@@ -46,6 +59,9 @@ void setup() {
   // Setting initial condition of serialEn pin to HIGH
   digitalWrite(serialEn1, HIGH);
   digitalWrite(serialEn2, HIGH);
+
+  // begin lcd communications
+  lcd.begin(16, 4);
 
   Serial.begin(57600);
 
@@ -60,51 +76,65 @@ void setup() {
   configurePS2X();
 }
 
+byte zero_pos = 123;
 void loop() {
+  updateLCD();
   ps2x.read_gamepad(); // read controller.
+  if (ps2x.ButtonPressed(PSB_CIRCLE)) {                                     // o - reset upper pwm
+    stopBot();
+  }
+
   // when L1 is pressed, enable left analog stick values to control the base motors..
   if (ps2x.Button(PSB_R1)) {
     int RX = ps2x.Analog(PSS_RX);
-    if (RX == 138) {
+    if (RX == zero_pos) {
       Serial.print("Stopped at ");
-      Serial.println(138 - RX);
+      Serial.println(zero_pos - RX);
       stopBot();
     }
-    else if (RX > 138) {
+    else if (RX > zero_pos) {
       Serial.print("Right :: ");
       Serial.print(RX);
       Serial.print(" :: ");
-      walkRight((RX - 138) * (60.000 / 117.000));
+      walkRight((RX - zero_pos) * (60.000 / (255.000 - (float)zero_pos)));
     }
-    else if (RX < 138) {
+    else if (RX < zero_pos) {
       Serial.print("Left :: ");
       Serial.print(RX);
       Serial.print(" :: ");
-      walkLeft((138 - RX) * (60.000 / 138.000));
+      walkLeft((zero_pos - RX) * (60.000 / (float)zero_pos));
     }
+    //    Serial.println("|");
   }
+  //  Serial.println("*");
+  //  if (walk_direction == LOW)
   pidWalk();
+  //  Serial.println("x");
   delay(50);
 }
-/*--------------------------------------------------------| PID |--------------------------------------------------------*/
 
+/*--------------------------------------------------------| PID |--------------------------------------------------------*/
 void pidWalk() {
   if (walk_pwm == 0) {
     for (int i = 0; i < 4; i++) analogWrite(base_motor[i].pwmPin, walk_pwm);
     return;
   }
-  int positionVal = setPoint;
   switch (walk_direction) {
-    case HIGH:
+    case LOW:
       digitalWrite(serialEn1, LOW);
       while (Serial.available() <= 0);
+      Serial.print("x: ");
       positionVal = Serial.read();
+      Serial.println(positionVal);
       digitalWrite(serialEn1, HIGH);
       break;
-    case LOW:
+    case HIGH:
       digitalWrite(serialEn2, LOW);
+      //      Serial.println("-");
       while (Serial.available() <= 0);
+      Serial.print("x: ");
       positionVal = Serial.read();
+      Serial.println(positionVal);
       digitalWrite(serialEn2, HIGH);
       break;
   }
@@ -120,8 +150,8 @@ void pidWalk() {
 
     // Adjust the motor speed based on calculated value
     // You might need to interchange the + and - sign if your robot move in opposite direction
-    int rightMotorSpeed = walk_pwm - motorSpeed;
-    int leftMotorSpeed = walk_pwm + motorSpeed;
+    rightMotorSpeed = walk_pwm - motorSpeed;
+    leftMotorSpeed = walk_pwm + motorSpeed;
 
     // If the speed of motor exceed max speed, set the speed to max speed
     if (rightMotorSpeed > maxSpeed) rightMotorSpeed = maxSpeed;
@@ -161,12 +191,12 @@ void pidWalk() {
 // stop the bot.
 void stopBot() {
   walk_pwm = 0;
-  walk_direction = HIGH;
+  walk_direction = LOW;
 }
 
 // move the bot in the right direction.
 void walkRight(int pwm) {
-  Serial.print(pwm);
+  Serial.println(pwm);
   walk_pwm = pwm;
   walk_direction = HIGH;
 }
@@ -223,4 +253,79 @@ void configurePS2X() {
   }
   if (error == 1) //skip loop if no controller found
     return;
+}
+
+/*-------LCD---------------------------------------------------------------------------------------*/
+/*
+   |0|0|0|0|0|0|0|0|0|0|1|1|1|1|1|1|
+  c|0|1|2|3|4|5|6|7|8|9|0|1|2|3|4|5|
+  r  ---------------------------------
+  0|P|V|:| |#|#| | |W|D|:| |H| | | |
+  1|M|S|:| |L| |#|#|#| |R| |#|#|#| |
+  2| | | | | | |P|W|M|:| | |#|#|#| |
+  3| | | | | | | | | | | | | | | | |
+*/
+
+void updateLCD() {
+  displayLCD("PV:", 0, 0);
+  displayLCD(positionVal, 5, 0, 2);
+  displayLCD("WD:", 8, 0);
+  switch (walk_direction) {
+    case HIGH:
+      displayLCD("H", 12, 0);
+      break;
+    case LOW:
+      displayLCD("L", 12, 0);
+      break;
+  }
+  displayLCD("MS:", 0, 1);
+  displayLCD("L", 4, 1);
+  displayLCD(leftMotorSpeed, 8, 1, 3);
+  displayLCD("R", 10, 1);
+  displayLCD(rightMotorSpeed, 14, 1, 3);
+  displayLCD("PWM:", 6, 2);
+  displayLCD(walk_pwm, 14, 2, 3);
+}
+// clear garbage values w/o updating the entire display
+void cleanLCD(byte end_col, byte end_row) {
+  while (true) {
+    old_col = (old_col + 1) % 16;
+    if (old_col == 0) {
+      old_row = (old_row + 1) % 4;
+      lcd.setCursor(old_col, old_row);
+    }
+    if (old_col != 0) lcd.print(" ");
+    if ((old_col == end_col) && (old_row == end_row)) {
+      return;
+    }
+    //    delay(250);
+  }
+}
+
+// function to display numbers on the lcdisplay.
+// arguments: the number, the column of it's unit digit, the row,
+// and the max possible no. of digits the value can have.
+void displayLCD(int value, byte unit_col, byte unit_row, byte valueLen) {
+  cleanLCD((unit_col - valueLen) + 1, unit_row);
+  for (int i = valueLen - 1; i > 0; i--)  ((value / int(pow(10, i))) > 0) ? : lcd.print(" ");
+  old_col = unit_col + 1;
+  lcd.print(value);
+}
+
+// function to display string on the screen
+void displayLCD(String s, byte start_col, byte start_row) {
+  cleanLCD(start_col, start_row);
+  old_col += s.length();
+  lcd.print(s);
+}
+
+// function to display some timer on the screen
+void displayLCD(int minutes, int seconds, byte start_col, byte start_row, String t) {
+  cleanLCD(start_col, start_row);
+  old_col += 5;
+  (minutes < 10) ? lcd.print("0") : NULL;
+  lcd.print(minutes);
+  lcd.print(":");
+  (seconds < 10) ? lcd.print("0") : NULL;
+  lcd.print(seconds);
 }
